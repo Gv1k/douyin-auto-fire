@@ -77,18 +77,43 @@ async def open_douyin(settings: Settings) -> AsyncIterator[BrowserSession]:
     context: BrowserContext | None = None
     try:
         playwright = await async_playwright().start()
-        launch_args = {"headless": settings.headless}
+        launch_args = {
+            "headless": settings.headless,
+            "args": [
+                "--disable-blink-features=AutomationControlled",
+                "--disable-features=IsolateOrigins,site-per-process",
+            ],
+        }
         if settings.browser_path:
             launch_args["executable_path"] = settings.browser_path
         browser = await playwright.chromium.launch(**launch_args)
 
-        context_args = {"viewport": {"width": 1440, "height": 1000}, "locale": "zh-CN"}
+        # 与导出 cookie 时的真实浏览器环境保持一致，降低被判定为
+        # "登录环境异常"的概率（UA / 分辨率 / 时区应尽量匹配 cookie 生成设备）。
+        context_args = {
+            "viewport": {"width": 1240, "height": 827},
+            "locale": "zh-CN",
+            "timezone_id": "Asia/Shanghai",
+            "user_agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36 Edg/146.0.0.0"
+            ),
+        }
         if settings.storage_state:
             state = parse_auth_json(settings.storage_state, "DOUYIN_STORAGE_STATE")
             if not isinstance(state, dict):
                 raise ConfigError("DOUYIN_STORAGE_STATE 必须是 JSON 对象")
             context_args["storage_state"] = state
         context = await browser.new_context(**context_args)
+        # 隐藏 navigator.webdriver 等最常见的自动化检测特征。
+        await context.add_init_script(
+            """
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            window.chrome = window.chrome || { runtime: {} };
+            Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN', 'zh'] });
+            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+            """
+        )
         if not settings.storage_state and settings.cookie:
             cookies = parse_auth_json(settings.cookie, "DOUYIN_COOKIE")
             if not isinstance(cookies, list):
